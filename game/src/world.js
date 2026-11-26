@@ -1,246 +1,137 @@
-// Skyline Run — the world: terrain height, the river, the town, the lake,
-// the runway, the rings, and the flight model. No rendering here, only
-// numbers, so the physics can be tested without a canvas.
-import { CONFIG, ringCourse } from './config.js';
-import { noise2, noise2Big, mulberry32 } from './random.js';
+// Skyline Run v2 — the world definition, shared by the physics in main.js
+// and the 3D scene in render.js so the ground you see is the ground you hit.
+//
+// The valley runs along -Z. You take off from the home runway at z ~ 0, fly
+// twelve golden rings down the valley, and land on the far runway beside the
+// lake at z ~ -3250. Everything is analytic or seeded: same world every load.
 
-// River centre line: it snakes down the valley from the mountains to the lake.
+import { CONFIG } from './config.js';
+import { makeRng, rngRange } from './random.js';
+
+export const WORLD = {
+  seed: 20261126,
+  length: 3600,          // terrain extent along z (0 .. -length)
+  width: 900,            // terrain extent along x (-width/2 .. width/2)
+  floorY: 2,             // valley floor height
+  homeRunway: { x: 0, zTop: 90, zBot: -190, halfWidth: 15 },
+  farRunway: { x: 0, zTop: -3060, zBot: -3380, halfWidth: 15 },
+  lake: { x: 150, z: -2950, r: 175 },
+  riverAmp: 26,
+  riverFreq: 0.0035,
+};
+
 export function riverX(z) {
-  const r = CONFIG.river;
-  return r.baseX + Math.sin(z / r.wavelength) * r.amplitude;
+  return WORLD.riverAmp * Math.sin(z * WORLD.riverFreq);
 }
 
-// Height of the ground (metres) at world (x, z). The valley floor sits near
-// 0, the walls rise toward |x| = 420, and a mountain ridge crosses the
-// course around z 6800–8600. The runway and the town are flattened.
-export function groundHeight(x, z, seed = CONFIG.seed) {
-  const wall = Math.pow(Math.min(1, Math.abs(x) / CONFIG.worldHalfWidth), 2.2);
-  let h = 14 + wall * 120;
-  h += noise2(x, z, seed) * 16 + noise2Big(x, z, seed) * 34;
-  // Mountain ridge: a smooth bump that peaks mid-course.
-  const m = CONFIG.mountains;
-  const mt = Math.exp(-Math.pow((z - (m.z0 + m.z1) / 2) / 1100, 2));
-  h += mt * (m.peak * (0.45 + 0.55 * (0.5 + 0.5 * noise2Big(x * 0.5, 0, seed))));
-  // River valley: the ground dips toward the water.
-  const dRiver = Math.abs(x - riverX(z));
-  h -= Math.max(0, 1 - dRiver / 130) * 22;
-  // Lake: flat water at the end of the course.
-  const lake = CONFIG.lake;
-  if (z > lake.z0 && x > lake.x0 && x < lake.x1) h = Math.min(h, 2);
-  // Runway strip: flat, so take-off and the start screenshot are clean.
-  const rw = CONFIG.runway;
-  if (z > rw.z0 && z < rw.z1 && Math.abs(x - rw.x) < rw.halfWidth + 14) h = 2;
-  // Town: flattened pads under the buildings.
-  const c = CONFIG.city;
-  if (z > c.z0 && z < c.z1 && x > c.x0 && x < c.x1) h = Math.min(h, 26);
-  return Math.max(0, h);
+function inRunway(x, z, r) {
+  return Math.abs(x - r.x) <= r.halfWidth + 6 && z <= r.zTop + 10 && z >= r.zBot - 10;
 }
 
-// Town buildings: deterministic boxes on the flattened town pad.
-export function townBuildings(seed = CONFIG.seed) {
-  const rnd = mulberry32(seed + 99);
+// Ground height at any point. Order matters: valley shape first, then the
+// river and lake carve down, then the runways flatten everything back.
+export function terrainHeight(x, z) {
+  const ax = Math.abs(x);
+  let h = WORLD.floorY;
+
+  // Valley walls rising on both sides, steeper the further out you go.
+  if (ax > 70) {
+    const t = ax - 70;
+    h += t * t * 0.0022;
+  }
+  // Rolling shoulders so the walls are not smooth cones.
+  h += Math.max(0, ax - 55) * 0.05 * Math.sin(z * 0.008 + x * 0.01);
+  h += 6 * Math.sin(z * 0.0016 + 1.7) * Math.cos(x * 0.0021) * Math.min(1, Math.max(0, (ax - 90) / 120));
+  // Gentle undulation on the valley floor itself, kept out of the corridor.
+  if (ax > 34) h += 1.6 * Math.sin(x * 0.05) * Math.cos(z * 0.021);
+
+  // River channel carved down to water level.
+  const rd = Math.abs(x - riverX(z));
+  if (rd < 15) h = Math.min(h, 0.2 + rd * 0.12);
+
+  // The lake basin at the far end.
+  const ld = Math.hypot(x - WORLD.lake.x, z - WORLD.lake.z);
+  if (ld < WORLD.lake.r) h = Math.min(h, 0.2);
+
+  // Runways are dead flat.
+  if (inRunway(x, z, WORLD.homeRunway) || inRunway(x, z, WORLD.farRunway)) return WORLD.floorY;
+  return h;
+}
+
+export function onRunway(x, z, r) {
+  return Math.abs(x - r.x) <= r.halfWidth && z <= r.zTop && z >= r.zBot;
+}
+
+// The twelve rings: weaving side to side and up and down down the valley.
+export function buildRings() {
+  const rings = [];
+  for (let i = 0; i < CONFIG.ringCount; i++) {
+    rings.push({
+      index: i,
+      x: 34 * Math.sin(i * 1.7),
+      y: 27 + 10 * Math.sin(i * 2.3),
+      z: -330 - i * 235,
+      r: CONFIG.ringRadius,
+    });
+  }
+  return rings;
+}
+
+// Two towns of seeded boxes. Buildings are solid: main.js checks collisions
+// against this same list.
+export function buildBuildings() {
+  const rng = makeRng(WORLD.seed ^ 0x7a09);
   const out = [];
-  const c = CONFIG.city;
-  for (let gx = 0; gx < 7; gx++) {
-    for (let gz = 0; gz < 5; gz++) {
-      if (rnd() < 0.22) continue; // streets and squares stay open
-      const x = c.x0 + 30 + gx * 52 + (rnd() - 0.5) * 12;
-      const z = c.z0 + 40 + gz * 130 + (rnd() - 0.5) * 20;
-      const w = 22 + rnd() * 18;
-      const d = 22 + rnd() * 18;
-      const h = 26 + rnd() * rnd() * 70;
-      out.push({ x, z, w, d, h });
+  const clusters = [
+    { cx: -108, cz: -1080, n: 46, spread: 62 },
+    { cx: -118, cz: -2480, n: 26, spread: 48 },
+    { cx: 96, cz: -1720, n: 14, spread: 34 },
+  ];
+  const palette = [0xd9c9a8, 0xb8c4cc, 0xc98f6a, 0xa8b89a, 0xd6d6d6, 0xc4a4a4];
+  for (const c of clusters) {
+    for (let i = 0; i < c.n; i++) {
+      const x = c.cx + rngRange(rng, -c.spread, c.spread);
+      const z = c.cz + rngRange(rng, -c.spread, c.spread);
+      if (Math.abs(x) < 46) continue; // keep the flight corridor clear
+      const w = rngRange(rng, 9, 17);
+      const d = rngRange(rng, 9, 17);
+      const h = rngRange(rng, 9, 30) * (rng() < 0.12 ? 1.7 : 1);
+      out.push({ x, z, w, d, h, color: palette[Math.floor(rng() * palette.length)] });
     }
   }
   return out;
 }
 
-// Clouds: soft billboards floating above the valley, deterministic.
-export function clouds(seed = CONFIG.seed) {
-  const rnd = mulberry32(seed + 31);
+// Seeded low-poly trees on the valley floor and lower slopes.
+export function buildTrees() {
+  const rng = makeRng(WORLD.seed ^ 0x3f51);
+  const out = [];
+  for (let i = 0; i < 340; i++) {
+    const x = rngRange(rng, -330, 330);
+    const z = rngRange(rng, 60, -3450);
+    if (Math.abs(x) < 30) continue;                    // corridor + runways
+    if (Math.abs(x - riverX(z)) < 17) continue;        // not in the river
+    const ld = Math.hypot(x - WORLD.lake.x, z - WORLD.lake.z);
+    if (ld < WORLD.lake.r + 6) continue;               // not in the lake
+    const y = terrainHeight(x, z);
+    if (y > 46) continue;                              // treeline
+    out.push({ x, z, y, s: rngRange(rng, 0.8, 1.5) });
+  }
+  return out;
+}
+
+// Soft billboard-free clouds: clusters of flattened white spheres, seeded.
+export function buildClouds() {
+  const rng = makeRng(WORLD.seed ^ 0x99aa);
   const out = [];
   for (let i = 0; i < 26; i++) {
     out.push({
-      x: (rnd() - 0.5) * 900,
-      y: 300 + rnd() * 220,
-      z: rnd() * CONFIG.courseLength,
-      s: 60 + rnd() * 120,
+      x: rngRange(rng, -420, 420),
+      y: rngRange(rng, 95, 150),
+      z: rngRange(rng, 120, -3500),
+      s: rngRange(rng, 22, 46),
+      puffs: 3 + Math.floor(rng() * 3),
     });
   }
   return out;
-}
-
-export function newGame(seed = CONFIG.seed) {
-  return {
-    seed,
-    phase: 'title', // title | flying | paused | crashed | done
-    time: 0,
-    timeLeft: CONFIG.timeLimit,
-    score: 0,
-    rings: 0,
-    lives: CONFIG.lives,
-    combo: 0,
-    bestCombo: 0,
-    fuel: CONFIG.fuelMax,
-    // The plane starts on the runway, nose into the valley.
-    x: 0, y: 4, z: 0,
-    heading: 0, pitch: 0, roll: 0,
-    speed: 0, throttle: 0,
-    verticalSpeed: 0,
-    ringList: ringCourse(seed),
-    nextRing: 0,
-    ringFlash: 0, // seconds left of the "ring passed" flash
-    ringMessage: '',
-    crashTimer: 0,
-    distance: 0,
-    perfects: 0,
-    startedAt: 0,
-    finished: false,
-    reason: '',
-    muted: false,
-    buildings: townBuildings(seed),
-    cloudList: clouds(seed),
-    trail: [], // recent positions, for the faint contrail
-  };
-}
-
-export function nextRingOf(game) {
-  return game.ringList[game.nextRing] ?? null;
-}
-
-// One physics step. `input` carries steer (-1..1), pitch (-1..1),
-// throttleDelta (-1..1) and dt in seconds. Returns an event string or ''.
-export function stepGame(game, input, dt) {
-  if (game.phase !== 'flying') return '';
-  dt = Math.min(dt, 0.05);
-  game.time += dt;
-  game.timeLeft = Math.max(0, CONFIG.timeLimit - game.time + game.rings * 0);
-  // Fuel: it drains with the throttle, and an empty tank means the engine
-  // is out — the plane glides, sinks, and the ground ends the flight.
-  game.fuel = Math.max(0, game.fuel - (CONFIG.fuelDrainBase + CONFIG.fuelDrainThrottle * game.throttle) * dt);
-  if (game.fuel <= 0) game.throttle = 0;
-  // Time bonus is banked directly into timeLeft when a ring is passed.
-  game.throttle = Math.max(0, Math.min(1, game.throttle + input.throttleDelta * dt * 0.7));
-  const targetSpeed = game.throttle * CONFIG.maxSpeed;
-  game.speed += (targetSpeed - game.speed) * Math.min(1, dt * 0.55);
-  if (game.speed < CONFIG.minSpeed && game.y > 8) game.pitch -= 0.12 * dt;
-
-  // Steering: bank into the turn, heading follows the bank.
-  const targetRoll = input.steer * CONFIG.maxRoll;
-  game.roll += (targetRoll - game.roll) * Math.min(1, dt * 5);
-  game.heading += -game.roll * CONFIG.turnRate * dt * (0.35 + game.speed / CONFIG.maxSpeed);
-  game.heading = Math.max(-0.85, Math.min(0.85, game.heading));
-  // Pitch: pull up to climb, push down to dive; with no input the plane
-  // trims slightly nose-up, so it lifts off the runway instead of
-  // lawn-darting into the field past the threshold.
-  const targetPitch = input.pitch === 0 ? 0.08 : input.pitch * CONFIG.maxPitch;
-  game.pitch += (targetPitch - game.pitch) * Math.min(1, dt * 4);
-  const climb = Math.sin(game.pitch) * CONFIG.climbRate * (0.4 + game.speed / CONFIG.maxSpeed);
-  game.verticalSpeed = climb;
-  game.y = Math.max(0, game.y + climb * dt);
-  game.y = Math.min(620, game.y);
-  const forward = Math.max(0, game.speed);
-  game.z += Math.cos(game.heading) * forward * dt * 0.9;
-  game.x += -Math.sin(game.heading) * forward * dt * 0.9;
-  game.x = Math.max(-CONFIG.worldHalfWidth, Math.min(CONFIG.worldHalfWidth, game.x));
-  game.distance += forward * dt * 0.9;
-  game.trail.push({ x: game.x, y: game.y, z: game.z });
-  if (game.trail.length > 40) game.trail.shift();
-  if (game.ringFlash > 0) game.ringFlash -= dt;
-
-  // Rings: crossing a ring's plane inside its circle scores.
-  const ring = nextRingOf(game);
-  if (ring) {
-    const prevZ = game.z - Math.cos(game.heading) * forward * dt * 0.9;
-    if (prevZ < ring.z && game.z >= ring.z) {
-      const dx = game.x - ring.x, dy = game.y - ring.y;
-      const d = Math.hypot(dx, dy);
-      if (d < ring.r) {
-        const perfect = d < ring.r * 0.34;
-        game.rings++;
-        game.combo++;
-        game.bestCombo = Math.max(game.bestCombo, game.combo);
-        if (perfect) game.perfects++;
-        const gained = CONFIG.ringScore + (perfect ? CONFIG.perfectBonus : 0) + game.combo * 5;
-        game.score += gained;
-        // Bank the time bonus straight into the remaining time, and
-        // refuel: rings are the only fuel on the course.
-        game.timeLeft = Math.min(CONFIG.timeLimit, game.timeLeft + CONFIG.ringTimeBonus);
-        game.time -= CONFIG.ringTimeBonus;
-        game.fuel = Math.min(CONFIG.fuelMax, game.fuel + CONFIG.fuelPerRing);
-        game.nextRing++;
-        game.ringFlash = 1.4;
-        game.ringMessage = perfect ? `PERFECT +${gained}` : `RING ${game.rings}  +${gained}`;
-        if (game.nextRing >= game.ringList.length) {
-          game.phase = 'done';
-          game.finished = true;
-          game.reason = 'Course complete — every ring flown.';
-          return 'finished';
-        }
-        return 'ring';
-      }
-      // Crossed the plane outside the ring: the ring is missed, combo resets.
-      game.combo = 0;
-      game.nextRing++;
-      game.ringFlash = 1.0;
-      game.ringMessage = 'RING MISSED';
-      if (game.nextRing >= game.ringList.length) {
-        game.phase = 'done';
-        game.finished = true;
-        game.reason = 'Course complete — every ring flown.';
-        return 'finished';
-      }
-      return 'miss';
-    }
-  }
-
-  // Terrain: flying into the ground (or a mountain) is a crash. The plane
-  // starts on the runway at y=4 over ground 2, so the check needs a tight
-  // margin and must ignore the runway strip itself, or take-off would
-  // crash on the first frame.
-  const ground = groundHeight(game.x, game.z, game.seed);
-  const onRunway = game.z > CONFIG.runway.z0 && game.z < CONFIG.runway.z1
-    && Math.abs(game.x - CONFIG.runway.x) < CONFIG.runway.halfWidth + 14;
-  if (game.y <= ground + 1.5 && game.speed > 20 && !onRunway) {
-    game.lives--;
-    game.score = Math.max(0, game.score - CONFIG.crashPenalty);
-    game.combo = 0;
-    if (game.lives <= 0) {
-      game.phase = 'done';
-      game.finished = true;
-      game.reason = 'Crashed into the terrain — out of airframes.';
-      return 'crashed-done';
-    }
-    // Respawn just behind the next ring, level and slow, and keep flying.
-    // The spare airframe comes with a quarter tank from the ground crew.
-    const target = nextRingOf(game) ?? { x: 0, y: 150, z: game.z + 400 };
-    game.x = target.x; game.y = target.y + 30; game.z = Math.max(0, target.z - 500);
-    game.heading = 0; game.pitch = 0; game.roll = 0; game.speed = 90;
-    game.throttle = 0.55;
-    game.fuel = Math.max(game.fuel, 25);
-    game.phase = 'crashed';
-    game.crashTimer = 1.6;
-    return 'crashed';
-  }
-
-  // Out of time ends the flight; the lake at the end of the course is the
-  // natural finish line, so reaching it also ends it cleanly.
-  if (game.timeLeft <= 0) {
-    game.phase = 'done';
-    game.finished = true;
-    game.reason = 'Time up — the flight window closed.';
-    return 'timeout';
-  }
-  if (game.z >= CONFIG.courseLength) {
-    game.phase = 'done';
-    game.finished = true;
-    game.reason = 'Landed the course — across the lake.';
-    return 'finished';
-  }
-  return '';
-}
-
-// Heading in degrees, 360 = due north up the valley.
-export function headingDegrees(game) {
-  return Math.round(((360 - (game.heading * 180) / Math.PI) % 360 + 360) % 360);
 }

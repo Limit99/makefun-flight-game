@@ -1,52 +1,56 @@
-// Skyline Run — input: keyboard plus mouse clicks on the title / end
-// screens. Keys are read as a held set so holding a key steers smoothly;
-// the game itself only ever sees steer / pitch / throttleDelta numbers.
-export function createInput(canvas, handlers) {
-  const keys = new Set();
-  const state = { steer: 0, pitch: 0, throttleDelta: 0 };
-  const codeOf = (e) => e.code;
+// Skyline Run v2 — keyboard input.
+// A small state tracker: main.js polls held keys for the flight axes and
+// asks about edge presses (pause, mute, restart) once per frame.
 
-  function onKeyDown(e) {
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
-    if (e.repeat) return;
-    keys.add(codeOf(e));
-    handlers.onPress?.(codeOf(e));
-  }
-  function onKeyUp(e) { keys.delete(codeOf(e)); }
+const HELD = new Set();
+const PRESSED = new Set(); // edge-triggered, cleared by main.js each frame
 
-  function poll() {
-    const left = keys.has('ArrowLeft') || keys.has('KeyA');
-    const right = keys.has('ArrowRight') || keys.has('KeyD');
-    const up = keys.has('ArrowUp');
-    const down = keys.has('ArrowDown');
-    const thrUp = keys.has('KeyW');
-    const thrDown = keys.has('KeyS');
-    state.steer = (right ? 1 : 0) - (left ? 1 : 0);
-    // Up arrow pulls the nose up (arcade convention, like the title says).
-    state.pitch = (up ? 1 : 0) - (down ? 1 : 0);
-    state.throttleDelta = (thrUp ? 1 : 0) - (thrDown ? 1 : 0);
-    if (keys.has('Space')) state.steer *= 0.2;
-    return state;
-  }
+const TRACKED = new Set([
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+  'KeyA', 'KeyD', 'KeyW', 'KeyS', 'Space',
+  'KeyP', 'KeyM', 'KeyR', 'Enter', 'Escape',
+]);
 
-  function onClick(e) {
-    const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 1280;
-    const y = ((e.clientY - rect.top) / rect.height) * 720;
-    handlers.onClick?.(x, y);
-  }
-
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  canvas.addEventListener('click', onClick);
-  // Space levels the wings: a tap while flying recentres roll and heading.
-  function level() {
-    keys.delete('Space');
-  }
-  return { poll, keys, level };
+export function initInput() {
+  window.addEventListener('keydown', (e) => {
+    if (TRACKED.has(e.code)) e.preventDefault();
+    if (!e.repeat) PRESSED.add(e.code);
+    HELD.add(e.code);
+  });
+  window.addEventListener('keyup', (e) => HELD.delete(e.code));
+  window.addEventListener('blur', () => HELD.clear());
 }
 
-// Where a click counts as "start": the big centre panel on title/end.
-export function inCentrePanel(x, y) {
-  return x > 310 && x < 970 && y > 120 && y < 550;
+export function wasPressed(code) {
+  return PRESSED.has(code);
+}
+
+export function clearPressed() {
+  PRESSED.clear();
+}
+
+// -1..1 flight axes from whatever combination is held.
+export function bankAxis() {
+  let v = 0;
+  if (HELD.has('ArrowLeft') || HELD.has('KeyA')) v -= 1;
+  if (HELD.has('ArrowRight') || HELD.has('KeyD')) v += 1;
+  return v;
+}
+
+export function pitchAxis() {
+  let v = 0;
+  if (HELD.has('ArrowUp')) v += 1;    // nose up
+  if (HELD.has('ArrowDown')) v -= 1;  // nose down
+  return v;
+}
+
+export function throttleAxis() {
+  let v = 0;
+  if (HELD.has('KeyW')) v += 1;
+  if (HELD.has('KeyS')) v -= 1;
+  return v;
+}
+
+export function levelWingsHeld() {
+  return HELD.has('Space');
 }

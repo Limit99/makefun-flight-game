@@ -1,95 +1,128 @@
-// Skyline Run — sound: everything is synthesised with WebAudio, no audio
-// files. An engine hum follows throttle and speed, wind follows speed, and
-// rings, misses and crashes are short chimes. Audio only starts after a
-// user gesture, as browsers require.
-export function createAudio() {
-  let ctx = null, engine = null, engineGain = null, wind = null, windGain = null;
-  let muted = false;
-  let started = false;
+// Skyline Run v2 — synthesized sound, no audio files.
+// A WebAudio engine hum and wind rush that follow the flight, plus short
+// one-shot cues for rings, misses, crashes, touchdown and the finish.
+// Everything is created lazily on the first user gesture (browser policy).
 
-  function ensure() {
-    if (started) return true;
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      ctx = new AC();
-      engine = ctx.createOscillator();
-      engine.type = 'sawtooth';
-      engine.frequency.value = 55;
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 320;
-      engineGain = ctx.createGain(); engineGain.gain.value = 0;
-      engine.connect(lp); lp.connect(engineGain); engineGain.connect(ctx.destination);
-      engine.start();
-      // Wind: looped filtered noise from a small generated buffer.
-      const len = ctx.sampleRate;
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      wind = ctx.createBufferSource();
-      wind.buffer = buf; wind.loop = true;
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 0.6;
-      windGain = ctx.createGain(); windGain.gain.value = 0;
-      wind.connect(bp); bp.connect(windGain); windGain.connect(ctx.destination);
-      wind.start();
-      started = true;
-      return true;
-    } catch {
-      return false;
-    }
+let ctx = null;
+let master = null;
+let engineOsc = null;
+let engineGain = null;
+let windGain = null;
+let windFilter = null;
+let muted = false;
+
+export function initAudio() {
+  if (ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  ctx = new AC();
+  master = ctx.createGain();
+  master.gain.value = muted ? 0 : 0.5;
+  master.connect(ctx.destination);
+
+  // Engine: a detuned saw pair through a lowpass, pitch follows throttle.
+  engineOsc = ctx.createOscillator();
+  engineOsc.type = 'sawtooth';
+  engineOsc.frequency.value = 55;
+  const engineFilter = ctx.createBiquadFilter();
+  engineFilter.type = 'lowpass';
+  engineFilter.frequency.value = 320;
+  engineGain = ctx.createGain();
+  engineGain.gain.value = 0.0;
+  engineOsc.connect(engineFilter).connect(engineGain).connect(master);
+  engineOsc.start();
+
+  // Wind: looped noise through a bandpass, gain follows airspeed.
+  const len = ctx.sampleRate * 2;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buf;
+  noise.loop = true;
+  windFilter = ctx.createBiquadFilter();
+  windFilter.type = 'bandpass';
+  windFilter.frequency.value = 600;
+  windFilter.Q.value = 0.6;
+  windGain = ctx.createGain();
+  windGain.gain.value = 0.0;
+  noise.connect(windFilter).connect(windGain).connect(master);
+  noise.start();
+}
+
+export function setMuted(m) {
+  muted = m;
+  if (master && ctx) master.gain.setTargetAtTime(m ? 0 : 0.5, ctx.currentTime, 0.05);
+}
+
+export function isMuted() {
+  return muted;
+}
+
+// Called every frame while flying.
+export function updateAudio(throttle, speedNorm, running) {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const target = running ? 0.05 + throttle * 0.075 : 0.0;
+  engineGain.gain.setTargetAtTime(target, t, 0.12);
+  engineOsc.frequency.setTargetAtTime(48 + throttle * 65 + speedNorm * 12, t, 0.12);
+  windGain.gain.setTargetAtTime(running ? speedNorm * speedNorm * 0.16 : 0.0, t, 0.15);
+  windFilter.frequency.setTargetAtTime(350 + speedNorm * 900, t, 0.15);
+}
+
+function blip(freqA, freqB, dur, type, vol, when = 0) {
+  if (!ctx) return;
+  const t = ctx.currentTime + when;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freqA, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(30, freqB), t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(master);
+  o.start(t);
+  o.stop(t + dur + 0.02);
+}
+
+export function sndRing(perfect) {
+  blip(880, 880, 0.12, 'sine', 0.22);
+  blip(1318, 1318, 0.2, 'sine', 0.2, 0.09);
+  if (perfect) blip(1760, 1760, 0.26, 'sine', 0.16, 0.18);
+}
+
+export function sndMiss() {
+  blip(220, 160, 0.22, 'triangle', 0.18);
+}
+
+export function sndCrash() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const len = ctx.sampleRate * 0.4;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.value = 0.5;
+  const f = ctx.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = 900;
+  src.connect(f).connect(g).connect(master);
+  src.start(t);
+  blip(120, 40, 0.4, 'sawtooth', 0.2);
+}
+
+export function sndTouchdown(smooth) {
+  blip(300, 240, 0.1, 'sine', 0.2);
+  if (smooth) {
+    blip(660, 660, 0.14, 'sine', 0.18, 0.1);
+    blip(990, 990, 0.22, 'sine', 0.16, 0.2);
   }
+}
 
-  function tone(freq, at, dur, type, vol) {
-    if (!ctx || muted) return;
-    const o = ctx.createOscillator();
-    o.type = type; o.frequency.value = freq;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, at);
-    g.gain.linearRampToValueAtTime(vol, at + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.001, at + dur);
-    o.connect(g); g.connect(ctx.destination);
-    o.start(at); o.stop(at + dur + 0.05);
-  }
-
-  return {
-    ensure,
-    setMuted(m) { muted = m; if (engineGain) engineGain.gain.value = 0; if (windGain) windGain.gain.value = 0; },
-    isMuted() { return muted; },
-    // Called every frame while flying: engine and wind follow the plane.
-    update(game) {
-      if (!ctx || muted || !started) return;
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-      const t = ctx.currentTime;
-      const flying = game.phase === 'flying';
-      engine.frequency.setTargetAtTime(48 + game.throttle * 70 + game.speed * 0.22, t, 0.1);
-      engineGain.gain.setTargetAtTime(flying ? 0.045 + game.throttle * 0.05 : 0, t, 0.15);
-      windGain.gain.setTargetAtTime(flying ? Math.min(0.09, game.speed / 2400) : 0, t, 0.2);
-    },
-    ring(perfect) {
-      if (!ctx || muted) return;
-      const t = ctx.currentTime;
-      tone(660, t, 0.16, 'sine', 0.22);
-      tone(880, t + 0.09, 0.18, 'sine', 0.22);
-      if (perfect) tone(1320, t + 0.18, 0.28, 'sine', 0.2);
-    },
-    miss() {
-      if (!ctx || muted) return;
-      tone(220, ctx.currentTime, 0.25, 'triangle', 0.14);
-    },
-    crash() {
-      if (!ctx || muted) return;
-      const t = ctx.currentTime;
-      tone(90, t, 0.5, 'sawtooth', 0.25);
-      tone(55, t + 0.05, 0.6, 'square', 0.16);
-    },
-    click() {
-      if (!ctx || muted) return;
-      tone(520, ctx.currentTime, 0.07, 'sine', 0.12);
-    },
-    finish() {
-      if (!ctx || muted) return;
-      const t = ctx.currentTime;
-      [523, 659, 784, 1046].forEach((f, i) => tone(f, t + i * 0.12, 0.3, 'sine', 0.2));
-    },
-  };
+export function sndFinish() {
+  const notes = [523, 659, 784, 1046];
+  notes.forEach((n, i) => blip(n, n, 0.24, 'triangle', 0.2, i * 0.13));
 }

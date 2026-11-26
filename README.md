@@ -12,7 +12,7 @@ Open `game/index.html` in a desktop browser (or run `node serve.ts` and open htt
 
 1. **Take off** — press `Enter` (or click the panel). Throttle is already set; push `W` for full power.
 2. **Steer** — `←` / `→` or `A` / `D` bank and turn, `↑` / `↓` climb and dive, `W` / `S` throttle up and down. `Space` levels the wings.
-3. **Thread the rings** — the next ring is gold and numbered; fly through its centre for a perfect bonus. Each ring adds 6 seconds and builds your combo.
+3. **Thread the rings** — the next ring is gold and numbered; fly through its centre for a perfect bonus. Each ring adds 6 seconds and 6% fuel, and builds your combo. Watch the fuel gauge: an empty tank means a glide, and the ground ends the flight.
 4. **Stay out of the ground** — the valley floor, the town roofs and the mountain ridge are all solid. A crash costs an airframe (you have 3) and 50 points.
 
 Fly all 12 rings and the flight ends over the lake; run out of time or airframes and it ends where you are.

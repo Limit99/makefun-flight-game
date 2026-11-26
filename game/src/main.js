@@ -35,7 +35,7 @@ function announce() {
   const text = game.phase === 'flying'
     ? `Flying: ring ${Math.min(game.rings + 1, CONFIG.ringCount)} of ${CONFIG.ringCount}, ` +
       `score ${game.score}, altitude ${Math.round(game.y * 3.28)} feet, ` +
-      `speed ${Math.round(game.speed)} knots, ${Math.ceil(game.timeLeft)} seconds left.`
+      `speed ${Math.round(game.speed)} knots, fuel ${Math.round(game.fuel)} percent, ${Math.ceil(game.timeLeft)} seconds left.`
     : game.phase === 'done'
       ? `Flight over. Score ${game.score}, ${game.rings} of ${CONFIG.ringCount} rings. ${game.reason}`
       : 'Skyline Run. Press Enter to take off.';

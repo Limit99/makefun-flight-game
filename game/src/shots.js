@@ -25,6 +25,7 @@ export function applyShot(game, shot, seed) {
     game.speed = 168; game.throttle = 0.82;
     game.score = 365; game.rings = 3; game.nextRing = 3;
     game.combo = 3; game.timeLeft = 142; game.time = 38;
+    game.fuel = 72;
     game.ringFlash = 0.9; game.ringMessage = 'RING 3  +115';
     game.distance = 3050;
   } else if (shot === 'end') {

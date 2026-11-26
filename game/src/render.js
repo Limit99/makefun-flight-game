@@ -300,14 +300,24 @@ function drawHud(ctx, game) {
     ['THR', `${Math.round(game.throttle * 100)}%`],
     ['TIME', fmtTime(game.timeLeft)],
     ['SCORE', String(game.score)],
+    ['FUEL', `${Math.round(game.fuel)}%`],
   ];
-  let x = 400;
+  let x = 390;
   for (const [label, value] of items) {
     ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = '#9fc4e8'; ctx.textAlign = 'left';
     ctx.fillText(label, x, 18);
-    ctx.font = 'bold 19px system-ui, sans-serif'; ctx.fillStyle = '#fff';
+    ctx.font = 'bold 19px system-ui, sans-serif';
+    ctx.fillStyle = label === 'FUEL' && game.fuel < 20 ? '#ff8a70' : '#fff';
     ctx.fillText(value, x, 42);
-    x += label === 'SCORE' ? 130 : 118;
+    x += label === 'SCORE' ? 118 : 104;
+  }
+  // Low-fuel warning, flashing once a second.
+  if (game.phase === 'flying' && game.fuel < 20 && Math.floor(game.time * 2) % 2 === 0) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 18px system-ui, sans-serif';
+    ctx.fillStyle = '#ff8a70';
+    ctx.fillText('⚠ LOW FUEL — FLY THE NEXT RING TO REFUEL', CX, 108);
+    ctx.textAlign = 'left';
   }
   // Lives.
   ctx.textAlign = 'right'; ctx.font = 'bold 19px system-ui, sans-serif'; ctx.fillStyle = '#ffb3a7';
@@ -430,7 +440,7 @@ function drawTitle(ctx, game) {
   ctx.fillStyle = '#ffd970'; ctx.font = 'bold 22px system-ui, sans-serif';
   ctx.fillText(game.speed > 0 || game.time > 0 ? 'Press ENTER to fly again' : 'Press ENTER to take off', CX, 512);
   ctx.fillStyle = '#9fc4e8'; ctx.font = '15px system-ui, sans-serif';
-  ctx.fillText('180 seconds · 12 rings · 3 airframes · a ring adds 6 seconds', CX, 540 - 8);
+  ctx.fillText('180 seconds · 12 rings · 3 airframes · a ring adds 6 seconds and 6% fuel', CX, 540 - 8);
 }
 
 function drawPaused(ctx) {
@@ -470,6 +480,7 @@ function drawEnd(ctx, game) {
     `Perfect rings  ${game.perfects}`,
     `Best combo  x${game.bestCombo}`,
     `Distance  ${Math.round(game.distance / 100) / 10} km`,
+    `Fuel left  ${Math.round(game.fuel)}%`,
     `Time left  ${fmtTime(game.timeLeft)}`,
   ];
   let y = 340;

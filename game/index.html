@@ -1,19 +1,170 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Skyline Run — a valley flight game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c1c30; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0a0f16; }
+  body {
+    font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+    color: #eaf4ff;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; overflow: hidden;
+  }
+  #wrap {
+    position: relative; width: min(100vw, 177.78vh); aspect-ratio: 16 / 9;
+    background: #000; box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+    user-select: none;
+  }
+  #game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ---------- HUD ---------- */
+  #hud-top {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; gap: 6px; padding: 8px 10px;
+    background: linear-gradient(180deg, rgba(6,12,20,0.78), rgba(6,12,20,0));
+    pointer-events: none;
+  }
+  .inst {
+    background: rgba(8, 15, 24, 0.62); border: 1px solid rgba(150, 190, 230, 0.25);
+    border-radius: 8px; padding: 4px 10px 5px; min-width: 74px; text-align: center;
+  }
+  .inst .lab { font-size: 10px; letter-spacing: 0.14em; color: #9db8d2; }
+  .inst .val { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .inst.grow { flex: 1; }
+  .bar { height: 7px; background: rgba(255,255,255,0.14); border-radius: 4px; margin-top: 4px; overflow: hidden; }
+  .bar > div { height: 100%; width: 100%; background: #57c24d; border-radius: 4px; transition: width 0.15s linear; }
+  #h-thr-bar { background: #ffb340; }
+  #h-lives { color: #ffd76a; font-size: 16px; letter-spacing: 2px; }
+
+  #hud-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 8px 12px; pointer-events: none;
+    background: linear-gradient(0deg, rgba(6,12,20,0.66), rgba(6,12,20,0));
+  }
+  #horizon, #compass {
+    background: rgba(8, 15, 24, 0.55); border: 1px solid rgba(150, 190, 230, 0.25); border-radius: 8px;
+  }
+  #hud-right { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  #hud-right .inst { min-width: 108px; }
+
+  #msg {
+    position: absolute; top: 17%; left: 0; right: 0; text-align: center;
+    font-size: clamp(20px, 3.4vw, 40px); font-weight: 800; letter-spacing: 0.04em;
+    color: #ffd76a; text-shadow: 0 2px 14px rgba(0,0,0,0.75);
+    opacity: 0; transition: opacity 0.35s; pointer-events: none;
+  }
+  #warn {
+    position: absolute; top: 64px; left: 0; right: 0; text-align: center;
+    font-size: clamp(14px, 1.8vw, 22px); font-weight: 700; color: #ff8a7a;
+    text-shadow: 0 1px 8px rgba(0,0,0,0.8); visibility: hidden; pointer-events: none;
+    animation: blink 0.9s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0.35; } }
+
+  /* ---------- Panels ---------- */
+  .panel {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(ellipse at center, rgba(5,10,18,0.30) 0%, rgba(5,10,18,0.62) 78%);
+    cursor: pointer; padding: 24px;
+  }
+  .panel h1 {
+    font-size: clamp(34px, 6vw, 74px); letter-spacing: 0.10em; font-weight: 900;
+    color: #fff; text-shadow: 0 4px 30px rgba(0,0,0,0.8);
+  }
+  .panel h1 .accent { color: #ffd76a; }
+  .panel .sub { margin-top: 8px; font-size: clamp(14px, 1.7vw, 20px); color: #cfe4f7; max-width: 640px; }
+  .panel .cols {
+    margin-top: 20px; display: flex; gap: 14px; flex-wrap: wrap; justify-content: center;
+  }
+  .card {
+    background: rgba(10, 20, 34, 0.82); border: 1px solid rgba(150, 190, 230, 0.3);
+    border-radius: 12px; padding: 12px 16px; text-align: left; min-width: 210px;
+  }
+  .card h3 { font-size: 12px; letter-spacing: 0.16em; color: #ffd76a; margin-bottom: 7px; }
+  .card p { font-size: 14px; line-height: 1.55; color: #dbeafb; }
+  .card b { color: #fff; }
+  .cta {
+    margin-top: 22px; font-size: clamp(15px, 1.8vw, 21px); font-weight: 700; color: #0a0f16;
+    background: #ffd76a; border-radius: 999px; padding: 10px 26px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  }
+  #end-rows { margin-top: 14px; min-width: min(420px, 80vw); }
+  #end-rows .row {
+    display: flex; justify-content: space-between; gap: 30px;
+    padding: 5px 14px; font-size: 16px; color: #cfe4f7;
+    border-bottom: 1px solid rgba(150, 190, 230, 0.16);
+  }
+  #end-rows .row b { color: #fff; }
+  #end-score { margin-top: 14px; font-size: clamp(24px, 3.4vw, 40px); font-weight: 900; color: #ffd76a; }
+  #panel-end, #panel-pause { display: none; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Skyline Run: fly a small plane through twelve rings over a river valley, with altitude, speed and heading on the instruments"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
-<script type="module" src="./src/main.js"></script>
+<div id="wrap">
+  <canvas id="game-canvas" width="1280" height="720"></canvas>
+
+  <div id="hud-top">
+    <div class="inst"><div class="lab">ALT</div><div class="val" id="h-alt">0 m</div></div>
+    <div class="inst"><div class="lab">SPD</div><div class="val" id="h-spd">0 kt</div></div>
+    <div class="inst"><div class="lab">HDG</div><div class="val" id="h-hdg">000°</div></div>
+    <div class="inst"><div class="lab">TIME</div><div class="val" id="h-time">3:00</div></div>
+    <div class="inst grow"><div class="lab">OBJECTIVE</div><div class="val" id="h-ring" style="font-size:16px; padding-top:3px;">RING 1/12</div></div>
+    <div class="inst"><div class="lab">WIND</div><div class="val" id="h-wind" style="font-size:15px; padding-top:4px;">· 0 m/s</div></div>
+    <div class="inst"><div class="lab">SCORE</div><div class="val" id="h-score">0</div></div>
+    <div class="inst"><div class="lab">LIVES</div><div class="val" id="h-lives">✈✈✈</div></div>
+    <div class="inst" style="min-width:104px;"><div class="lab">FUEL</div><div class="val" id="h-fuel-txt" style="font-size:15px;">100%</div><div class="bar"><div id="h-fuel-bar"></div></div></div>
+  </div>
+
+  <div id="warn"></div>
+  <div id="msg"></div>
+
+  <div id="hud-bottom">
+    <canvas id="horizon" width="150" height="96"></canvas>
+    <canvas id="compass" width="300" height="26"></canvas>
+    <div id="hud-right">
+      <div class="inst"><div class="lab">V/S</div><div class="val" id="h-vs" style="font-size:15px;">0 m/s</div></div>
+      <div class="inst"><div class="lab">THROTTLE</div><div class="bar" style="width:92px;"><div id="h-thr-bar" style="width:0%;"></div></div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-title">
+    <h1>SKYLINE <span class="accent">RUN</span></h1>
+    <p class="sub">Take off, thread twelve golden rings down a mountain valley, mind your fuel — then land on the far runway by the lake.</p>
+    <div class="cols">
+      <div class="card"><h3>FLY</h3><p><b>← →</b> or <b>A/D</b> bank &amp; turn<br><b>↑ ↓</b> climb &amp; dive<br><b>W / S</b> throttle up / down<br><b>Space</b> level the wings</p></div>
+      <div class="card"><h3>SURVIVE</h3><p>Every ring: <b>+6 s</b> and <b>+6% fuel</b>.<br>Full throttle drinks the tank —<br>cruise gently between rings.<br>Crosswinds push you off line.</p></div>
+      <div class="card"><h3>FINISH</h3><p>After ring 12, land on the far<br>runway: slow, gentle, lined up.<br><b>P</b> pause · <b>M</b> mute · <b>R</b> restart</p></div>
+    </div>
+    <div class="cta">Click or press Enter to fly</div>
+  </div>
+
+  <div class="panel" id="panel-end">
+    <h1 id="end-title" style="font-size:clamp(26px,4.4vw,52px);">LANDED</h1>
+    <div id="end-rows"></div>
+    <div id="end-score">SCORE 0</div>
+    <div class="cta">Click or press Enter to fly again</div>
+  </div>
+
+  <div class="panel" id="panel-pause">
+    <h1 style="font-size:clamp(26px,4vw,48px);">PAUSED</h1>
+    <p class="sub">Press P or Esc to resume</p>
+  </div>
+
+  <div class="sr-only" id="sr-status" aria-live="polite"></div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>
